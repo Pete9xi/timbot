@@ -1,4 +1,5 @@
 const axios = require('axios');
+const fs = require('fs');
 const config = require('./config.json');
 
 /**
@@ -6,13 +7,11 @@ const config = require('./config.json');
  */
 class TwitchApi {
   static get requestOptions() {
-    // Automatically remove "oauth:" prefix if it's present
     const oauthPrefix = "oauth:";
     let oauthBearer = config.twitch_oauth_token;
     if (oauthBearer.startsWith(oauthPrefix)) {
       oauthBearer = oauthBearer.substr(oauthPrefix.length);
     }
-    // Construct default request options
     return {
       baseURL: "https://api.twitch.tv/helix/",
       headers: {
@@ -22,53 +21,81 @@ class TwitchApi {
     };
   }
 
-  static handleApiError(err) {
-    const res = err.response || { };
+  // Function to handle token refresh
+  static refreshToken() {
+    return new Promise((resolve, reject) => {
+      axios.post('https://twitchtokengenerator.com/api/refresh/', {
+        refresh_token: config.twitch_refresh_token
+      })
+        .then((res) => {
+          if (res.data.success) {
+            // Update the tokens in config.json
+            config.twitch_oauth_token = res.data.token;
+            config.twitch_refresh_token = res.data.refresh;
 
-    if (res.data && res.data.message) {
-      console.error('[TwitchApi]', 'API request failed with Helix error:', res.data.message, `(${res.data.error}/${res.data.status})`);
+            // Write the updated config back to the config.json file
+            fs.writeFileSync('./config.json', JSON.stringify(config, null, 2));
+
+            console.log('[TwitchApi]', 'Token refreshed successfully');
+            resolve(res.data.token);
+          } else {
+            reject('Failed to refresh token');
+          }
+        })
+        .catch((err) => {
+          reject(err);
+        });
+    });
+  }
+
+  // Error handler that tries refreshing token if necessary
+  static handleApiError(err) {
+    const res = err.response || {};
+
+    if (res.data && res.data.status === 401) {  // 401 means Unauthorized, token might have expired
+      console.error('[TwitchApi]', 'Token expired, trying to refresh token...');
+      return this.refreshToken()
+        .then((newToken) => {
+          // Retry the failed request with the new token
+          return Promise.resolve(newToken);
+        })
+        .catch((refreshError) => {
+          console.error('[TwitchApi]', 'Failed to refresh token:', refreshError);
+          return Promise.reject(refreshError);
+        });
     } else {
-      console.error('[TwitchApi]', 'API request failed with error:', err.message || err);
+      if (res.data && res.data.message) {
+        console.error('[TwitchApi]', 'API request failed with Helix error:', res.data.message, `(${res.data.error}/${res.data.status})`);
+      } else {
+        console.error('[TwitchApi]', 'API request failed with error:', err.message || err);
+      }
+      return Promise.reject(err);
     }
   }
 
+  // Modify the fetch functions to retry after token refresh
   static fetchStreams(channelNames) {
-    return new Promise((resolve, reject) => {
-      axios.get(`/streams?user_login=${channelNames.join('&user_login=')}`, this.requestOptions)
-        .then((res) => {
-          resolve(res.data.data || []);
-        })
-        .catch((err) => {
-          this.handleApiError(err);
-          reject(err);
-        });
-    });
+    return axios.get(`/streams?user_login=${channelNames.join('&user_login=')}`, this.requestOptions)
+      .then((res) => res.data.data || [])
+      .catch((err) => {
+        return this.handleApiError(err).then(() => this.fetchStreams(channelNames));
+      });
   }
 
   static fetchUsers(channelNames) {
-    return new Promise((resolve, reject) => {
-      axios.get(`/users?login=${channelNames.join('&login=')}`, this.requestOptions)
-        .then((res) => {
-          resolve(res.data.data || []);
-        })
-        .catch((err) => {
-          this.handleApiError(err);
-          reject(err);
-        });
-    });
+    return axios.get(`/users?login=${channelNames.join('&login=')}`, this.requestOptions)
+      .then((res) => res.data.data || [])
+      .catch((err) => {
+        return this.handleApiError(err).then(() => this.fetchUsers(channelNames));
+      });
   }
 
   static fetchGames(gameIds) {
-    return new Promise((resolve, reject) => {
-      axios.get(`/games?id=${gameIds.join('&id=')}`, this.requestOptions)
-        .then((res) => {
-          resolve(res.data.data || []);
-        })
-        .catch((err) => {
-          this.handleApiError(err);
-          reject(err);
-        });
-    });
+    return axios.get(`/games?id=${gameIds.join('&id=')}`, this.requestOptions)
+      .then((res) => res.data.data || [])
+      .catch((err) => {
+        return this.handleApiError(err).then(() => this.fetchGames(gameIds));
+      });
   }
 }
 
