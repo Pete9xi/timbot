@@ -21,25 +21,30 @@ class TwitchApi {
     };
   }
 
-  // Function to handle token refresh
+  // Function to handle token refresh using Twitch API
   static refreshToken() {
     return new Promise((resolve, reject) => {
-      axios.post('https://twitchtokengenerator.com/api/refresh/', {
-        refresh_token: config.twitch_refresh_token
-      })
-        .then((res) => {
-          if (res.data.success) {
-            // Update the tokens in config.json
-            config.twitch_oauth_token = res.data.token;
-            config.twitch_refresh_token = res.data.refresh;
+      const url = 'https://id.twitch.tv/oauth2/token';
+      const params = {
+        client_id: config.twitch_client_id,
+        client_secret: config.twitch_client_secret,
+        grant_type: 'refresh_token',
+        refresh_token: config.twitch_refresh_token,
+      };
 
-            // Write the updated config back to the config.json file
+      axios.post(url, null, { params })
+        .then((res) => {
+          if (res.data && res.data.access_token) {
+            // Update the tokens in config.json
+            config.twitch_oauth_token = res.data.access_token;
+            config.twitch_refresh_token = res.data.refresh_token;
+
             fs.writeFileSync('./config.json', JSON.stringify(config, null, 2));
 
             console.log('[TwitchApi]', 'Token refreshed successfully');
-            resolve(res.data.token);
+            resolve(res.data.access_token);
           } else {
-            reject('Failed to refresh token');
+            reject('Failed to refresh token: No access_token received');
           }
         })
         .catch((err) => {
@@ -48,7 +53,6 @@ class TwitchApi {
     });
   }
 
-  // Error handler that tries refreshing token if necessary
   static handleApiError(err) {
     const res = err.response || {};
 
@@ -73,7 +77,6 @@ class TwitchApi {
     }
   }
 
-  // Modify the fetch functions to retry after token refresh
   static fetchStreams(channelNames) {
     return axios.get(`/streams?user_login=${channelNames.join('&user_login=')}`, this.requestOptions)
       .then((res) => res.data.data || [])
